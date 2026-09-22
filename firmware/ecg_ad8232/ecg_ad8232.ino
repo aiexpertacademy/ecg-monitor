@@ -2,8 +2,18 @@
   ESP32 + AD8232 ECG front-end
   ----------------------------
   Reads the AD8232 analog output and streams samples over WebSocket to the
-  local Node.js server (see /server), which broadcasts them to the browser
+  Node.js server (see /server), which broadcasts them to the browser
   dashboard for live graphing and BPM calculation.
+
+  WiFi setup (no reflashing needed per device/network):
+    On first boot -- or if it can't reconnect to a previously saved network --
+    the ESP32 opens its own WiFi hotspot named "ECG-Setup". Connect to that
+    hotspot with a phone or laptop, a setup page should open automatically
+    (or open a browser and go to 192.168.4.1); pick your WiFi network, enter
+    its password, and save. The ESP32 remembers it in flash and auto-connects
+    on every future boot -- even after power loss. To make it forget a saved
+    network (e.g. moving the device to a new WiFi), hold the BOOT button
+    (GPIO0) while powering on / resetting the board.
 
   Wiring (typical AD8232 breakout):
     AD8232 OUTPUT -> ESP32 ADC pin (default: GPIO34, input-only ADC1 pin)
@@ -12,15 +22,16 @@
     AD8232 3.3V   -> ESP32 3V3
     AD8232 GND    -> ESP32 GND
 
-  Required library (Arduino Library Manager):
+  Required libraries (Arduino Library Manager):
     "WebSockets" by Markus Sattler (arduinoWebSockets)
+    "WiFiManager" by tzapu
 
-  Configure WIFI_SSID / WIFI_PASSWORD / SERVER_HOST below, then flash.
+  Configure SERVER_HOST / USE_SSL below for your deployment, then flash.
 */
 
 #include <WiFi.h>
 #include <WebSocketsClient.h>
-#include "secrets.h" // defines WIFI_SSID / WIFI_PASSWORD -- copy secrets.h.example, see that file
+#include <WiFiManager.h>
 
 // ---- Configure these ----
 // Set to true when pointing at a cloud host (e.g. Render), which serves
@@ -38,6 +49,7 @@ const char* SERVER_PATH   = "/ws";
 const int ECG_PIN   = 34; // ADC1 channel, input-only pin
 const int LO_PLUS    = 32;
 const int LO_MINUS   = 33;
+const int WIFI_RESET_PIN = 0; // BOOT button on most ESP32 DevKit boards
 
 // ---- Sampling ----
 const uint32_t SAMPLE_RATE_HZ = 250;
@@ -59,22 +71,40 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+void setupWiFi() {
+  pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
+  WiFiManager wm;
+
+  // Hold BOOT while powering on/resetting to forget the saved network and
+  // force the setup portal to reopen (e.g. when moving the device to a
+  // different WiFi network).
+  if (digitalRead(WIFI_RESET_PIN) == LOW) {
+    Serial.println("BOOT held -- clearing saved WiFi credentials...");
+    wm.resetSettings();
+  }
+
+  wm.setConfigPortalTimeout(180); // give up and retry after 3 minutes if no one configures it
+
+  Serial.println("Connecting to saved WiFi (or opening ECG-Setup portal)...");
+  bool connected = wm.autoConnect("ECG-Setup");
+
+  if (!connected) {
+    Serial.println("Failed to connect / portal timed out -- restarting...");
+    delay(1000);
+    ESP.restart();
+  }
+
+  Serial.print("WiFi connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(LO_PLUS, INPUT);
   pinMode(LO_MINUS, INPUT);
   analogReadResolution(12); // 0-4095
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("WiFi connected, IP: ");
-  Serial.println(WiFi.localIP());
+  setupWiFi();
 
   if (USE_SSL) {
     webSocket.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);

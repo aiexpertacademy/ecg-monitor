@@ -17,11 +17,28 @@
   let lastRateCalcTime = 0;
   let lastRateCalcCount = 0;
 
+  // --- Despiking filter (kills single-sample noise before it reaches anything else) ---
+  let medianBuf = [];
+  function despike(v) {
+    medianBuf.push(v);
+    if (medianBuf.length > 3) medianBuf.shift();
+    if (medianBuf.length < 3) return v;
+    const sorted = [...medianBuf].sort((a, b) => a - b);
+    return sorted[1]; // median of last 3 raw samples
+  }
+
+  function median(arr) {
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
   // --- Peak / BPM detection state ---
   let armed = true;
-  let lastPeakT = -Infinity;
-  let peakTimes = [];
+  let lastCandidateT = -Infinity; // refractory reference, updated on every threshold crossing attempt
+  let peakTimes = []; // only *accepted* beats, used for BPM math
   const REFRACTORY_MS = 280; // ~214 bpm max, filters double-triggering on one QRS
+  const OUTLIER_INTERVAL_RATIO = 0.65; // reject a "beat" arriving much faster than the recent pace
 
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
@@ -48,11 +65,22 @@
     const highThresh = min + range * 0.62;
     const lowThresh = min + range * 0.5;
 
-    if (armed && sample.v > highThresh && (sample.t - lastPeakT) > REFRACTORY_MS) {
-      lastPeakT = sample.t;
+    if (armed && sample.v > highThresh && (sample.t - lastCandidateT) > REFRACTORY_MS) {
+      lastCandidateT = sample.t;
+      armed = false;
+
+      if (peakTimes.length >= 2) {
+        const intervals = [];
+        for (let i = 1; i < peakTimes.length; i++) intervals.push(peakTimes[i] - peakTimes[i - 1]);
+        const expectedInterval = median(intervals);
+        const candidateInterval = sample.t - peakTimes[peakTimes.length - 1];
+        if (candidateInterval < expectedInterval * OUTLIER_INTERVAL_RATIO) {
+          return; // arrived far too soon to be a real beat -- almost certainly noise, discard
+        }
+      }
+
       peakTimes.push(sample.t);
       if (peakTimes.length > 8) peakTimes.shift();
-      armed = false;
       updateBpmDisplay();
     } else if (!armed && sample.v < lowThresh) {
       armed = true;
@@ -135,7 +163,7 @@
       }
       if (msg.type !== 'sample') return;
 
-      const sample = { v: msg.v, t: msg.t };
+      const sample = { v: despike(msg.v), t: msg.t };
       buffer.push(sample);
       if (buffer.length > MAX_POINTS * 2) buffer = buffer.slice(-MAX_POINTS);
 

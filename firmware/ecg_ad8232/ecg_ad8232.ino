@@ -11,9 +11,15 @@
     hotspot with a phone or laptop, a setup page should open automatically
     (or open a browser and go to 192.168.4.1); pick your WiFi network, enter
     its password, and save. The ESP32 remembers it in flash and auto-connects
-    on every future boot -- even after power loss. To make it forget a saved
-    network (e.g. moving the device to a new WiFi), hold the BOOT button
-    (GPIO0) while powering on / resetting the board.
+    on every future boot -- even after power loss.
+
+    To make it forget a saved network (e.g. moving the device to a new
+    WiFi), hold the BOOT button for 5 seconds WHILE THE DEVICE IS ALREADY
+    RUNNING NORMALLY (fully booted, not during power-on/reset). GPIO0/BOOT
+    is also the chip's hardware boot-mode-select pin, so holding it during
+    an actual power-on or reset risks dropping the chip into its flashing
+    bootloader instead of running this sketch at all -- checking for a long
+    press only after normal runtime has started avoids that entirely.
 
   Wiring (typical AD8232 breakout):
     AD8232 OUTPUT -> ESP32 ADC pin (default: GPIO34, input-only ADC1 pin)
@@ -37,12 +43,12 @@
 // Set to true when pointing at a cloud host (e.g. Render), which serves
 // HTTPS/WSS only. Set to false for local testing against `npm start` on
 // your own PC (plain ws:// on your LAN).
-const bool USE_SSL = false;
+const bool USE_SSL = true;
 
 // Local testing: your PC's LAN IP, plain ws://, port 8080.
 // Cloud (Render, etc.): the hostname only (no https://), wss://, port 443.
-const char* SERVER_HOST   = "192.168.29.202"; // e.g. "ecg-monitor-xxxx.onrender.com"
-const uint16_t SERVER_PORT = 8080;             // local: 8080, cloud: 443
+const char* SERVER_HOST   = "ecg-monitor-15ti.onrender.com";
+const uint16_t SERVER_PORT = 443;
 const char* SERVER_PATH   = "/ws";
 
 // ---- Pins ----
@@ -50,6 +56,7 @@ const int ECG_PIN   = 34; // ADC1 channel, input-only pin
 const int LO_PLUS    = 32;
 const int LO_MINUS   = 33;
 const int WIFI_RESET_PIN = 0; // BOOT button on most ESP32 DevKit boards
+const uint32_t WIFI_RESET_HOLD_MS = 5000; // long-press duration to trigger a WiFi reset
 
 // ---- Sampling ----
 const uint32_t SAMPLE_RATE_HZ = 250;
@@ -74,15 +81,6 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 void setupWiFi() {
   pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
   WiFiManager wm;
-
-  // Hold BOOT while powering on/resetting to forget the saved network and
-  // force the setup portal to reopen (e.g. when moving the device to a
-  // different WiFi network).
-  if (digitalRead(WIFI_RESET_PIN) == LOW) {
-    Serial.println("BOOT held -- clearing saved WiFi credentials...");
-    wm.resetSettings();
-  }
-
   wm.setConfigPortalTimeout(180); // give up and retry after 3 minutes if no one configures it
 
   Serial.println("Connecting to saved WiFi (or opening ECG-Setup portal)...");
@@ -117,8 +115,27 @@ void setup() {
   lastSampleMicros = micros();
 }
 
+void checkWifiResetButton() {
+  static uint32_t pressStart = 0;
+
+  if (digitalRead(WIFI_RESET_PIN) == LOW) {
+    if (pressStart == 0) {
+      pressStart = millis();
+    } else if (millis() - pressStart >= WIFI_RESET_HOLD_MS) {
+      Serial.println("BOOT held 5s -- clearing saved WiFi credentials and restarting...");
+      WiFiManager wm;
+      wm.resetSettings();
+      delay(500);
+      ESP.restart();
+    }
+  } else {
+    pressStart = 0;
+  }
+}
+
 void loop() {
   webSocket.loop();
+  checkWifiResetButton();
 
   uint32_t now = micros();
   if (now - lastSampleMicros >= SAMPLE_INTERVAL_US) {

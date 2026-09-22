@@ -1,0 +1,125 @@
+:root {
+  --bg: #0b0f14;
+  --panel: #121821;
+  --border: #223041;
+  --text: #e6edf3;
+  --muted: #7d8ba1;
+  --accent: #33e07a;
+  --danger: #ff5470;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.app {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
+
+.dot.connected {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .panels { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.bpm-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.bpm-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.bpm-value {
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.2;
+}
+
+.bpm-sub {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.graph-panel {
+  padding: 8px;
+}
+
+#ecgCanvas {
+  width: 100%;
+  height: 320px;
+  display: block;
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(to right, rgba(51,224,122,0.08) 0 1px, transparent 1px 32px),
+    repeating-linear-gradient(to bottom, rgba(51,224,122,0.08) 0 1px, transparent 1px 32px),
+    #060a0e;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}

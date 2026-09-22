@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ECG Monitor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>ECG Monitor</h1>
+      <div class="status" id="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Connecting…</span>
+      </div>
+    </header>
+
+    <section class="panels">
+      <div class="panel bpm-panel">
+        <div class="bpm-label">BPM</div>
+        <div class="bpm-value" id="bpmValue">--</div>
+        <div class="bpm-sub" id="bpmSub">waiting for signal…</div>
+      </div>
+
+      <div class="panel graph-panel">
+        <canvas id="ecgCanvas"></canvas>
+      </div>
+    </section>
+
+    <footer>
+      <span id="rateInfo">-- Hz</span>
+      <span id="sampleCount">0 samples</span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

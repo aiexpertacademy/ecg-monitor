@@ -1,0 +1,167 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WebSocketsServer.h>
+
+// ---- Hotspot Credentials ----
+const char* ssid = "ECG-Monitor-Local";
+const char* password = ""; // Open network
+
+// ---- Servers ----
+WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+// ---- Pins ----
+const int ECG_PIN   = 34; // ADC1 channel
+const int LO_PLUS   = 32;
+const int LO_MINUS  = 33;
+
+// ---- Sampling ----
+const uint32_t SAMPLE_RATE_HZ = 250;
+const uint32_t SAMPLE_INTERVAL_US = 1000000UL / SAMPLE_RATE_HZ;
+uint32_t lastSampleMicros = 0;
+
+// ---- Offline HTML Dashboard with BPM Logic ----
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live ECG Offline</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #111; color: #0f0; margin: 0; padding: 20px; }
+    canvas { background: #000; width: 100%; max-width: 800px; height: 300px; border: 1px solid #333; border-radius: 5px; box-shadow: 0 0 10px #0f05; }
+    h2 { margin-bottom: 5px; }
+    #status { color: #888; font-size: 0.9em; margin-top: 0; }
+    #bpmBox { font-size: 2.5em; font-weight: bold; margin: 15px 0; color: #ff0055; text-shadow: 0 0 10px #ff005588; }
+  </style>
+</head>
+<body>
+  <h2>Live ECG Monitor</h2>
+  <p id="status">Connecting to ESP32...</p>
+  <div id="bpmBox">-- BPM</div>
+  <canvas id="ecgChart" width="800" height="300"></canvas>
+  
+  <script>
+    const canvas = document.getElementById('ecgChart');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('status');
+    const bpmText = document.getElementById('bpmBox');
+    
+    const graphWidth = canvas.width;
+    let data = new Array(graphWidth).fill(2048);
+    
+    // BPM Calculation Variables
+    const THRESHOLD = 3000; // Peak detection threshold (0-4095). Ise apne signal ke hisaab se adjust karein
+    const COOLDOWN_MS = 250; // Ek beat ke baad kitne time tak doosri beat count nahi karni (prevents double counting)
+    let lastPeakTime = 0;
+    let bpmArray = [];
+    
+    const gateway = `ws://${window.location.hostname}:81/`;
+    let websocket;
+
+    function initWebSocket() {
+      websocket = new WebSocket(gateway);
+      websocket.onopen    = () => { statusText.innerText = "Connected - Receiving Data"; statusText.style.color = "#0f0"; };
+      websocket.onclose   = () => { statusText.innerText = "Disconnected - Retrying..."; statusText.style.color = "#f00"; setTimeout(initWebSocket, 2000); };
+      websocket.onmessage = (event) => {
+        const vals = event.data.split(',');
+        if (vals.length >= 2) {
+          const val = parseInt(vals[0]);
+          const timestamp = parseInt(vals[1]); // millis() from ESP32
+          
+          // Peak Detection Logic
+          if (val > THRESHOLD && (timestamp - lastPeakTime) > COOLDOWN_MS) {
+            if (lastPeakTime > 0) {
+              const rrInterval = timestamp - lastPeakTime;
+              const currentBpm = 60000 / rrInterval;
+              
+              // Filter out noise (only consider realistic human BPM between 40 and 220)
+              if (currentBpm > 40 && currentBpm < 220) {
+                bpmArray.push(currentBpm);
+                if (bpmArray.length > 5) bpmArray.shift(); // Keep last 5 readings
+                
+                const avgBpm = bpmArray.reduce((a, b) => a + b, 0) / bpmArray.length;
+                bpmText.innerText = Math.round(avgBpm) + " BPM";
+              }
+            }
+            lastPeakTime = timestamp;
+          }
+
+          // Graphing Logic
+          data.push(val);
+          data.shift();
+          drawChart();
+        }
+      };
+    }
+
+    function drawChart() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      ctx.strokeStyle = '#0f0';
+      ctx.lineWidth = 2;
+      
+      for(let i = 0; i < data.length; i++) {
+        let y = canvas.height - ((data[i] / 4095) * canvas.height);
+        if(i === 0) ctx.moveTo(i, y);
+        else ctx.lineTo(i, y);
+      }
+      ctx.stroke();
+    }
+
+    window.onload = initWebSocket;
+  </script>
+</body>
+</html>
+)rawliteral";
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if(type == WStype_CONNECTED) {
+    Serial.printf("[%u] WebSocket Connected!\n", num);
+  } else if(type == WStype_DISCONNECTED) {
+    Serial.printf("[%u] WebSocket Disconnected!\n", num);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LO_PLUS, INPUT);
+  pinMode(LO_MINUS, INPUT);
+  analogReadResolution(12); // ADC reads 0-4095
+
+  // 1. Hotspot Start Karein
+  Serial.println("\nStarting Access Point...");
+  WiFi.softAP(ssid, password);
+  Serial.print("Connect to WiFi 'ECG-Monitor-Local' and go to: http://");
+  Serial.println(WiFi.softAPIP());
+
+  // 2. HTTP Server Start (HTML file serve karne ke liye)
+  server.on("/", []() {
+    server.send_P(200, "text/html", index_html);
+  });
+  server.begin();
+  
+  // 3. WebSocket Server Start (Live data ke liye)
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
+  lastSampleMicros = micros();
+}
+
+void loop() {
+  server.handleClient();
+  webSocket.loop();
+
+  uint32_t now = micros();
+  if (now - lastSampleMicros >= SAMPLE_INTERVAL_US) {
+    lastSampleMicros += SAMPLE_INTERVAL_US;
+
+    bool leadsOff = (digitalRead(LO_PLUS) == HIGH) || (digitalRead(LO_MINUS) == HIGH);
+    int value = leadsOff ? 2048 : analogRead(ECG_PIN);
+
+    char msg[32];
+    // ESP32 ka millis() bhej rahe hain taaki JS time track kar sake
+    snprintf(msg, sizeof(msg), "%d,%lu", value, millis());
+    webSocket.broadcastTXT(msg);
+  }
+}
